@@ -5,16 +5,13 @@ import plotly.express as px
 from datetime import date
 import os
 
-# 1. Configuración de Seguridad y Página
+# 1. Configuración
 st.set_page_config(page_title="Gestión Mediamendoza", page_icon="📈", layout="wide")
 
-# Función para cargar el logo de forma segura
 def mostrar_logo():
-    # Buscamos el archivo en la carpeta principal
     if os.path.exists("logo.png"):
         st.image("logo.png", width=250)
     else:
-        # Si no lo encuentra, mostramos el texto para no romper la app
         st.title("Mediamendoza")
 
 def check_password():
@@ -24,75 +21,96 @@ def check_password():
             del st.session_state["password"]
         else:
             st.session_state["password_correct"] = False
-
     if "password_correct" not in st.session_state:
         mostrar_logo()
         st.title("🔐 Acceso Restringido")
-        st.text_input("Ingresá la contraseña del sistema", type="password", on_change=password_entered, key="password")
+        st.text_input("Contraseña", type="password", on_change=password_entered, key="password")
         return False
     elif not st.session_state["password_correct"]:
         mostrar_logo()
         st.text_input("Contraseña incorrecta", type="password", on_change=password_entered, key="password")
         st.error("😕 Acceso denegado.")
         return False
-    else:
-        return True
+    return True
 
 if check_password():
-    # 2. Conexión y Carga de Datos
     conn = st.connection("gsheets", type=GSheetsConnection)
     try:
         df = conn.read(worksheet="Hoja 1", ttl=0)
     except Exception:
         df = pd.DataFrame(columns=["Fecha", "Tipo", "Entidad", "Categoría", "Monto", "Estado", "Notas"])
 
-    # 3. Cálculo de Saldos
+    # --- 2. LÓGICA CONTABLE AVANZADA ---
     if not df.empty:
         df["Monto"] = pd.to_numeric(df["Monto"], errors='coerce').fillna(0)
-        total_in = df[df["Tipo"] == "Ingreso"]["Monto"].sum()
-        total_out = df[df["Tipo"] == "Egreso"]["Monto"].sum()
-        saldo_actual = total_in - total_out
+        
+        # SALDO REAL (Solo lo Pagado)
+        ingresos_reales = df[(df["Tipo"] == "Ingreso") & (df["Estado"] == "Pagado")]["Monto"].sum()
+        egresos_reales = df[(df["Tipo"] == "Egreso") & (df["Estado"] == "Pagado")]["Monto"].sum()
+        saldo_real = ingresos_reales - egresos_reales
+        
+        # PROYECCIONES (Lo Pendiente)
+        a_cobrar = df[(df["Tipo"] == "Ingreso") & (df["Estado"] == "Pendiente")]["Monto"].sum()
+        a_pagar = df[(df["Tipo"] == "Egreso") & (df["Estado"] == "Pendiente")]["Monto"].sum()
     else:
-        total_in = total_out = saldo_actual = 0
+        ingresos_reales = egresos_reales = saldo_real = a_cobrar = a_pagar = 0
 
-    # 4. Barra Lateral (Sidebar)
+    # --- 3. BARRA LATERAL ---
     if os.path.exists("logo.png"):
         st.sidebar.image("logo.png", use_container_width=True)
     
-    st.sidebar.markdown("<h1 style='text-align: center; font-size: 18px;'>Control de Finanzas</h1>", unsafe_allow_html=True)
     st.sidebar.divider()
-    st.sidebar.metric("💰 SALDO ACTUAL", f"$ {saldo_actual:,.2f}")
-    st.sidebar.divider()
+    st.sidebar.metric("💰 SALDO CAJA (Real)", f"$ {saldo_real:,.2f}")
     
-    menu = st.sidebar.selectbox("Seleccioná una sección", ["📊 Dashboard", "➕ Cargar Movimiento", "📂 Ver Historial"])
+    # Mostrar alertas si hay pendientes importantes
+    if a_cobrar > 0:
+        st.sidebar.warning(f"📩 A Cobrar: $ {a_cobrar:,.2f}")
+    if a_pagar > 0:
+        st.sidebar.error(f"💸 A Pagar: $ {a_pagar:,.2f}")
+    
+    st.sidebar.divider()
+    menu = st.sidebar.selectbox("Menú", ["📊 Dashboard", "➕ Cargar Movimiento", "📂 Ver Historial"])
 
-    # --- SECCIÓN: DASHBOARD ---
+    # --- 4. SECCIÓN: DASHBOARD ---
     if menu == "📊 Dashboard":
-        st.title("📊 Resumen Financiero")
+        st.title("📊 Resumen de Caja y Proyecciones")
+        
+        # Fila 1: Dinero Real
+        st.subheader("Estado de Caja (Efectivo)")
         c1, c2, c3 = st.columns(3)
-        c1.metric("Total Ingresos", f"$ {total_in:,.2f}")
-        c2.metric("Total Egresos", f"$ {total_out:,.2f}")
-        c3.metric("Saldo Neto", f"$ {saldo_actual:,.2f}", delta=f"{saldo_actual:,.2f}")
+        c1.metric("Ingresos (Cobrados)", f"$ {ingresos_reales:,.2f}")
+        c2.metric("Egresos (Pagados)", f"$ {egresos_reales:,.2f}")
+        c3.metric("Saldo Real", f"$ {saldo_real:,.2f}", delta_color="normal")
+        
+        st.markdown("---")
+        
+        # Fila 2: Lo Pendiente
+        st.subheader("Pendientes (Por liquidar)")
+        p1, p2, p3 = st.columns(3)
+        p1.metric("Por Cobrar", f"$ {a_cobrar:,.2f}", delta="Ingresos Futuros")
+        p2.metric("Por Pagar", f"$ {a_pagar:,.2f}", delta="- Salida Prevista", delta_color="inverse")
+        p3.metric("Saldo Proyectado", f"$ {saldo_real + a_cobrar - a_pagar:,.2f}", help="Saldo si se cobrara y pagara todo lo pendiente")
 
         if not df.empty:
             st.markdown("---")
             col_graf1, col_graf2 = st.columns(2)
             with col_graf1:
-                st.subheader("Distribución de Gastos")
-                df_egresos = df[df["Tipo"] == "Egreso"]
-                if not df_egresos.empty:
-                    fig_out = px.pie(df_egresos, values='Monto', names='Categoría', hole=0.4, color_discrete_sequence=px.colors.sequential.RdBu)
+                st.subheader("Gastos Reales por Categoría")
+                df_pagados = df[(df["Tipo"] == "Egreso") & (df["Estado"] == "Pagado")]
+                if not df_pagados.empty:
+                    fig_out = px.pie(df_pagados, values='Monto', names='Categoría', hole=0.4)
                     st.plotly_chart(fig_out, use_container_width=True)
+                else:
+                    st.info("No hay gastos pagados aún.")
             with col_graf2:
-                st.subheader("Ingresos por Categoría")
-                df_ingresos = df[df["Tipo"] == "Ingreso"]
-                if not df_ingresos.empty:
-                    fig_in = px.bar(df_ingresos, x='Categoría', y='Monto', color='Categoría', color_discrete_sequence=px.colors.sequential.Greens_r)
-                    st.plotly_chart(fig_in, use_container_width=True)
+                st.subheader("Ingresos (Pagados vs Pendientes)")
+                fig_comp = px.bar(df[df["Tipo"] == "Ingreso"], x='Estado', y='Monto', color='Estado', 
+                                 color_discrete_map={'Pagado': '#00CC96', 'Pendiente': '#EF553B'})
+                st.plotly_chart(fig_comp, use_container_width=True)
 
-    # --- SECCIÓN: CARGA ---
+    # --- 5. SECCIÓN: CARGA ---
     elif menu == "➕ Cargar Movimiento":
-        st.title("➕ Cargar Nuevo Movimiento")
+        st.title("➕ Nuevo Registro")
         with st.form("form_carga", clear_on_submit=True):
             c1, c2 = st.columns(2)
             with c1:
@@ -104,16 +122,21 @@ if check_password():
                 f_cat = st.selectbox("Categoría", ["Pauta Oficial", "Pauta Privada", "Google Adsense", "Sueldos", "Hosting", "Servicios", "Otros"])
                 f_estado = st.radio("Estado", ["Pagado", "Pendiente"], horizontal=True)
             f_notas = st.text_area("Notas")
-            if st.form_submit_button("Guardar Registro"):
-                fecha_arg = f_fecha.strftime("%d/%m/%Y")
-                nueva_fila = pd.DataFrame([{"Fecha": fecha_arg, "Tipo": f_tipo, "Entidad": f_entidad, "Categoría": f_cat, "Monto": f_monto, "Estado": f_estado, "Notas": f_notas}])
-                df_final = pd.concat([df, nueva_fila], ignore_index=True)
-                conn.update(worksheet="Hoja 1", data=df_final)
-                st.toast("Guardado con éxito")
-                st.rerun()
+            if st.form_submit_button("Guardar en Mediamendoza"):
+                if f_entidad == "" or f_monto <= 0:
+                    st.error("⚠️ Datos incompletos.")
+                else:
+                    fecha_arg = f_fecha.strftime("%d/%m/%Y")
+                    nueva_fila = pd.DataFrame([{"Fecha": fecha_arg, "Tipo": f_tipo, "Entidad": f_entidad, "Categoría": f_cat, "Monto": f_monto, "Estado": f_estado, "Notas": f_notas}])
+                    df_final = pd.concat([df, nueva_fila], ignore_index=True)
+                    conn.update(worksheet="Hoja 1", data=df_final)
+                    st.toast("¡Registro guardado!")
+                    st.rerun()
 
-    # --- SECCIÓN: HISTORIAL ---
+    # --- 6. SECCIÓN: HISTORIAL ---
     elif menu == "📂 Ver Historial":
-        st.title("📂 Historial de Movimientos")
-        if not df.empty:
-            st.dataframe(df.iloc[::-1], use_container_width=True)
+        st.title("📂 Historial Completo")
+        # Filtro rápido
+        estado_filtro = st.multiselect("Filtrar por Estado:", ["Pagado", "Pendiente"], default=["Pagado", "Pendiente"])
+        df_filtrado = df[df["Estado"].isin(estado_filtro)]
+        st.dataframe(df_filtrado.iloc[::-1], use_container_width=True)
