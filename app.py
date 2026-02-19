@@ -37,8 +37,10 @@ if check_password():
         for col in columnas_necesarias:
             if col not in df.columns:
                 df[col] = "Sin asignar"
+        # Limpieza de datos críticos
+        df["Cuenta"] = df["Cuenta"].fillna("Sin asignar").astype(str)
     except Exception:
-        df = pd.DataFrame(columns=columnas_necesarias)
+        df = pd.DataFrame(columns=["Fecha", "Tipo", "Entidad", "Categoría", "Monto", "Estado", "Notas", "Vencimiento", "Cuenta", "Medio"])
 
     # --- LÓGICA DE SALDOS ---
     if not df.empty:
@@ -59,13 +61,13 @@ if check_password():
     st.sidebar.divider()
     st.sidebar.metric("💰 SALDO CAJA TOTAL", f"$ {saldo_real_total:,.2f}")
 
-    # --- SECCIÓN: DASHBOARD ---
+    # --- SECCIÓN: DASHBOARD (RESTAURADO COMPLETO) ---
     if menu == "📊 Dashboard":
         st.title("📊 Resumen Financiero")
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Efectivo Real", f"$ {saldo_real_total:,.2f}")
-        m2.metric("A Cobrar", f"$ {a_cobrar_pend:,.2f}")
-        m3.metric("A Pagar", f"$ {a_pagar_pend:,.2f}", delta_color="inverse")
+        m2.metric("Pendiente Cobro", f"$ {a_cobrar_pend:,.2f}")
+        m3.metric("Obligaciones", f"$ {a_pagar_pend:,.2f}", delta_color="inverse")
         m4.metric("E-Cheques", f"$ {echeques_cartera:,.2f}")
         
         if not df.empty:
@@ -73,102 +75,96 @@ if check_password():
             g1, g2 = st.columns(2)
             with g1:
                 st.subheader("🏦 Dinero por Cuenta")
-                cuentas = df["Cuenta"].unique()
+                # Filtramos para no mostrar cuentas vacías o "Sin asignar"
+                cuentas_validas = [c for c in df["Cuenta"].unique() if c and c != "nan" and c != "Sin asignar"]
                 resumen_cuentas = []
-                for c in cuentas:
+                for c in cuentas_validas:
                     i = df[(df["Cuenta"] == c) & (df["Estado"] == "Pagado") & (df["Tipo"] == "Ingreso")]["Monto"].sum()
                     e = df[(df["Cuenta"] == c) & (df["Estado"] == "Pagado") & (df["Tipo"] == "Egreso")]["Monto"].sum()
-                    if (i-e) != 0: resumen_cuentas.append({"Cuenta": c, "Saldo": i - e})
+                    resumen_cuentas.append({"Cuenta": c, "Saldo": i - e})
                 if resumen_cuentas:
-                    st.plotly_chart(px.bar(pd.DataFrame(resumen_cuentas), x="Cuenta", y="Saldo", color="Cuenta"), use_container_width=True)
+                    st.plotly_chart(px.bar(pd.DataFrame(resumen_cuentas), x="Cuenta", y="Saldo", color="Cuenta", template="plotly_white"), use_container_width=True)
+            
             with g2:
-                st.subheader("💸 Gastos por Categoría")
-                df_eg = df[df["Tipo"] == "Egreso"]
-                if not df_eg.empty:
-                    st.plotly_chart(px.pie(df_eg, values="Monto", names="Categoría", hole=0.4), use_container_width=True)
+                st.subheader("📈 Ingresos: Cobrado vs Pendiente")
+                df_ing = df[df["Tipo"] == "Ingreso"]
+                if not df_ing.empty:
+                    st.plotly_chart(px.bar(df_ing, x='Estado', y='Monto', color='Categoría', barmode='group'), use_container_width=True)
 
-    # --- SECCIÓN: VENCIMIENTOS (CON ALERTAS RESTAURADAS) ---
-    elif menu == "📆 Vencimientos":
-        st.title("📆 Control de Próximos Vencimientos")
-        
-        # Filtramos solo lo que está pendiente (Ingresos y Egresos)
-        pend = df[df["Estado"] == "Pendiente"].copy()
-        
-        if pend.empty:
-            st.success("🎉 ¡Excelente! No tenés vencimientos pendientes por ahora.")
+            st.markdown("---")
+            st.subheader("💸 Distribución de Gastos (Egresos Totales)")
+            df_eg = df[df["Tipo"] == "Egreso"]
+            if not df_eg.empty:
+                st.plotly_chart(px.pie(df_eg, values="Monto", names="Categoría", hole=0.4), use_container_width=True)
+
+    # --- SECCIÓN: BANCOS (CORREGIDA) ---
+    elif menu == "🏦 Bancos y Cuentas":
+        st.title("🏦 Estado de Cuentas Bancarias")
+        cuentas = [c for c in df["Cuenta"].unique() if c and c != "nan" and c != "Sin asignar"]
+        if not cuentas:
+            st.info("No hay cuentas con movimientos registrados.")
         else:
-            # Convertimos fecha de vencimiento para comparar
+            cols = st.columns(len(cuentas))
+            for idx, c in enumerate(cuentas):
+                i = df[(df["Cuenta"] == c) & (df["Estado"] == "Pagado") & (df["Tipo"] == "Ingreso")]["Monto"].sum()
+                e = df[(df["Cuenta"] == c) & (df["Estado"] == "Pagado") & (df["Tipo"] == "Egreso")]["Monto"].sum()
+                cols[idx].metric(str(c), f"$ {i-e:,.2f}")
+            
+            st.divider()
+            st.subheader("Detalle por Cuenta")
+            for c in cuentas:
+                with st.expander(f"Ver movimientos de {c}"):
+                    st.dataframe(df[df["Cuenta"] == c].iloc[::-1], use_container_width=True)
+
+    # --- SECCIÓN: VENCIMIENTOS (CON ALERTAS) ---
+    elif menu == "📆 Vencimientos":
+        st.title("📆 Control de Vencimientos")
+        pend = df[df["Estado"] == "Pendiente"].copy()
+        if pend.empty:
+            st.success("¡Todo al día!")
+        else:
             pend['V_Date'] = pd.to_datetime(pend['Vencimiento'], format='%d/%m/%Y', errors='coerce').dt.date
             pend = pend.sort_values('V_Date')
             hoy = date.today()
-
-            col_izq, col_der = st.columns(2)
             
-            with col_izq:
-                st.subheader("📉 Deudas y Egresos")
-                eg_pend = pend[pend["Tipo"] == "Egreso"]
-                if eg_pend.empty: st.write("Sin deudas pendientes.")
-                for _, r in eg_pend.iterrows():
-                    dias_faltantes = (r['V_Date'] - hoy).days if not pd.isnull(r['V_Date']) else 999
-                    
-                    label = f"{r['Vencimiento']} - {r['Entidad']} ($ {r['Monto']:,.2f})"
-                    
-                    if dias_faltantes < 0:
-                        st.error(f"🚨 **VENCIDO**: {label}")
-                    elif dias_faltantes <= 3:
-                        st.warning(f"⏳ **VENCE PRONTO** ({dias_faltantes} días): {label}")
-                    else:
-                        st.info(f"✅ **A tiempo**: {label}")
-
-            with col_der:
-                st.subheader("📈 Cobros Pendientes")
-                in_pend = pend[pend["Tipo"] == "Ingreso"]
-                if in_pend.empty: st.write("Sin cobros pendientes.")
-                for _, r in in_pend.iterrows():
-                    dias_faltantes = (r['V_Date'] - hoy).days if not pd.isnull(r['V_Date']) else 999
-                    label = f"{r['Vencimiento']} - {r['Entidad']} ($ {r['Monto']:,.2f})"
-                    
-                    if dias_faltantes < 0:
-                        st.error(f"🚩 **RECLAMAR PAGO (Atrasado)**: {label}")
-                    else:
-                        st.success(f"💰 **A Cobrar**: {label}")
+            c_eg, c_in = st.columns(2)
+            with c_eg:
+                st.subheader("❌ Deudas / Egresos")
+                for _, r in pend[pend["Tipo"] == "Egreso"].iterrows():
+                    dias = (r['V_Date'] - hoy).days if not pd.isnull(r['V_Date']) else 999
+                    txt = f"{r['Vencimiento']} - {r['Entidad']} ($ {r['Monto']:,.2f})"
+                    if dias < 0: st.error(f"🚨 VENCIDO: {txt}")
+                    elif dias <= 3: st.warning(f"⏳ VENCE PRONTO: {txt}")
+                    else: st.info(f"✅ A tiempo: {txt}")
+            with c_in:
+                st.subheader("📩 Cobros")
+                for _, r in pend[pend["Tipo"] == "Ingreso"].iterrows():
+                    st.success(f"💰 {r['Vencimiento']} - {r['Entidad']} ($ {r['Monto']:,.2f})")
 
     # --- SECCIÓN: CARGA ---
     elif menu == "➕ Cargar Movimiento":
         st.title("➕ Nuevo Registro")
-        categorias_dict = {
-            "Ingreso": ["Pauta Oficial", "Pauta Privada", "Google Adsense", "Otros Ingresos"],
-            "Egreso": ["Sueldos", "Hosting", "Servicios", "Impuestos", "Comisiones", "Marketing", "Otros"]
-        }
-        f_tipo = st.selectbox("Tipo de Movimiento", ["Ingreso", "Egreso"])
-        with st.form("form_carga", clear_on_submit=True):
+        cats = {"Ingreso": ["Pauta Oficial", "Pauta Privada", "Google Adsense", "Otros"], 
+                "Egreso": ["Sueldos", "Hosting", "Servicios", "Impuestos", "Comisiones", "Otros"]}
+        f_tipo = st.selectbox("Tipo", ["Ingreso", "Egreso"])
+        with st.form("carga"):
             c1, c2 = st.columns(2)
             with c1:
                 f_fecha = st.date_input("Fecha", date.today())
-                f_entidad = st.text_input("Entidad / Concepto")
-                f_cat = st.selectbox("Categoría", categorias_dict[f_tipo])
+                f_entidad = st.text_input("Entidad")
+                f_cat = st.selectbox("Categoría", cats[f_tipo])
             with c2:
-                f_monto = st.number_input("Monto ($)", min_value=0.0)
+                f_monto = st.number_input("Monto", min_value=0.0)
                 f_cuenta = st.selectbox("Cuenta", ["Caja Efectivo", "Banco Galicia", "Mercado Pago", "Banco Nación"])
                 f_medio = st.selectbox("Medio", ["Transferencia", "Efectivo", "E-Cheque", "Débito"])
-            
             f_venc = st.date_input("Vencimiento", date.today())
             f_estado = st.radio("Estado", ["Pagado", "Pendiente"], horizontal=True)
-            
-            if st.form_submit_button("💾 Guardar"):
+            if st.form_submit_button("Guardar"):
                 nueva = pd.DataFrame([{"Fecha": f_fecha.strftime("%d/%m/%Y"), "Tipo": f_tipo, "Entidad": f_entidad, "Categoría": f_cat, "Monto": f_monto, "Estado": f_estado, "Vencimiento": f_venc.strftime("%d/%m/%Y"), "Cuenta": f_cuenta, "Medio": f_medio}])
-                df_final = pd.concat([df, nueva], ignore_index=True)
-                conn.update(worksheet="Hoja 1", data=df_final)
-                st.success("Guardado!"); st.rerun()
+                conn.update(worksheet="Hoja 1", data=pd.concat([df, nueva], ignore_index=True))
+                st.rerun()
 
     # --- OTRAS SECCIONES ---
-    elif menu == "🏦 Bancos y Cuentas":
-        st.title("🏦 Bancos")
-        for c in df["Cuenta"].unique():
-            i = df[(df["Cuenta"] == c) & (df["Estado"] == "Pagado") & (df["Tipo"] == "Ingreso")]["Monto"].sum()
-            e = df[(df["Cuenta"] == c) & (df["Estado"] == "Pagado") & (df["Tipo"] == "Egreso")]["Monto"].sum()
-            st.metric(c, f"$ {i-e:,.2f}")
-
     elif menu == "📝 Gestionar Pendientes":
         st.title("📝 Liquidar")
         for idx, row in df[df["Estado"] == "Pendiente"].iterrows():
