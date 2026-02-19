@@ -86,7 +86,3 @@ if check_password():
             f_notas = st.text_area("Notas")
             if st.form_submit_button("Guardar Datos"):
                 nueva_fila = pd.DataFrame([{"Fecha": str(f_fecha), "Tipo": f_tipo, "Entidad":
-    st.dataframe(df.tail(10), use_container_width=True)
-else:
-    st.info("Todavía no hay movimientos registrados.")
-
