@@ -85,4 +85,12 @@ if check_password():
             
             f_notas = st.text_area("Notas")
             if st.form_submit_button("Guardar Datos"):
-                nueva_fila = pd.DataFrame([{"Fecha": str(f_fecha), "Tipo": f_tipo, "Entidad":
+                nueva_fila = pd.DataFrame([{"Fecha": str(f_fecha), "Tipo": f_tipo, "Entidad": f_entidad, "Categoría": f_cat, "Monto": f_monto, "Estado": f_estado, "Notas": f_notas}])
+                df_final = pd.concat([df, nueva_fila], ignore_index=True)
+                conn.update(worksheet="Hoja 1", data=df_final)
+                st.success("✅ Guardado correctamente.")
+                st.balloons()
+
+    elif menu == "📂 Ver Historial":
+        st.title("📂 Historial de Movimientos")
+        st.dataframe(df, use_container_width=True)
