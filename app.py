@@ -38,7 +38,7 @@ if check_password():
             if col not in df.columns:
                 df[col] = "Sin asignar"
     except Exception:
-        df = pd.DataFrame(columns=["Fecha", "Tipo", "Entidad", "Categoría", "Monto", "Estado", "Notas", "Vencimiento", "Cuenta", "Medio"])
+        df = pd.DataFrame(columns=columnas_necesarias)
 
     # --- LÓGICA DE SALDOS ---
     if not df.empty:
@@ -87,54 +87,63 @@ if check_password():
                 if not df_ing.empty:
                     st.plotly_chart(px.bar(df_ing, x='Estado', y='Monto', color='Categoría', barmode='group'), use_container_width=True)
 
-    # --- SECCIÓN: CARGA DINÁMICA ---
+    # --- SECCIÓN: CARGA (CORREGIDA E INTERACTIVA) ---
     elif menu == "➕ Cargar Movimiento":
         st.title("➕ Nuevo Registro")
         
-        # 1. Definimos las categorías por tipo
+        # Diccionario de categorías
         categorias_dict = {
             "Ingreso": ["Pauta Oficial", "Pauta Privada", "Google Adsense", "Venta de Activos", "Otros Ingresos"],
             "Egreso": ["Sueldos", "Hosting / Dominios", "Servicios (Luz, Internet)", "Impuestos (AFIP, Rentas)", "Comisiones Bancarias", "Préstamos/Cuotas", "Marketing/Publicidad", "Otros Gastos"]
         }
 
-        with st.form("form_carga", clear_on_submit=True):
-            col_a, col_b = st.columns(2)
+        # PASO 1: Selector de Tipo fuera del form para que sea interactivo
+        f_tipo = st.selectbox("1. Seleccioná el Tipo de Movimiento", ["Ingreso", "Egreso"])
+        
+        # PASO 2: El resto de los datos dentro del form para enviar todo junto
+        with st.form("form_carga_final", clear_on_submit=True):
+            st.write(f"### Detalles del {f_tipo}")
+            c1, c2 = st.columns(2)
             
-            with col_a:
+            with c1:
                 f_fecha = st.date_input("Fecha", date.today())
-                # El usuario elige primero el TIPO
-                f_tipo = st.selectbox("Tipo de Movimiento", ["Ingreso", "Egreso"])
                 f_entidad = st.text_input("Entidad / Concepto")
-            
-            with col_b:
-                f_monto = st.number_input("Monto ($)", min_value=0.0, step=0.01)
-                
-                # LA MAGIA: La categoría depende de f_tipo
+                # Aquí se cargan las categorías según el f_tipo seleccionado arriba
                 f_cat = st.selectbox("Categoría", categorias_dict[f_tipo])
-                
-                f_cuenta = st.selectbox("Cuenta / Banco", ["Caja Efectivo", "Banco Galicia", "Mercado Pago", "Banco Nación", "E-Cheque Terceros"])
             
+            with c2:
+                f_monto = st.number_input("Monto ($)", min_value=0.0, step=0.01)
+                f_cuenta = st.selectbox("Cuenta / Banco", ["Caja Efectivo", "Banco Galicia", "Mercado Pago", "Banco Nación", "E-Cheque Terceros"])
+                f_medio = st.selectbox("Medio de Pago", ["Transferencia", "Efectivo", "E-Cheque", "Débito Automático"])
+
             st.divider()
             c3, c4 = st.columns(2)
             with c3:
-                f_medio = st.selectbox("Medio de Pago", ["Transferencia", "Efectivo", "E-Cheque", "Débito Automático"])
                 f_estado = st.radio("Estado", ["Pagado", "Pendiente"], horizontal=True)
             with c4:
                 f_venc = st.date_input("Vencimiento / Cobro Cheque", date.today())
-                f_notas = st.text_area("Notas adicionales")
+            
+            f_notas = st.text_area("Notas adicionales")
 
             if st.form_submit_button("💾 Guardar Registro"):
                 if f_entidad == "" or f_monto <= 0:
                     st.error("⚠️ Entidad y Monto son requeridos")
                 else:
                     nueva = pd.DataFrame([{
-                        "Fecha": f_fecha.strftime("%d/%m/%Y"), "Tipo": f_tipo, "Entidad": f_entidad, 
-                        "Categoría": f_cat, "Monto": f_monto, "Estado": f_estado, "Notas": f_notas,
-                        "Vencimiento": f_venc.strftime("%d/%m/%Y"), "Cuenta": f_cuenta, "Medio": f_medio
+                        "Fecha": f_fecha.strftime("%d/%m/%Y"), 
+                        "Tipo": f_tipo, 
+                        "Entidad": f_entidad, 
+                        "Categoría": f_cat, 
+                        "Monto": f_monto, 
+                        "Estado": f_estado, 
+                        "Notas": f_notas,
+                        "Vencimiento": f_venc.strftime("%d/%m/%Y"), 
+                        "Cuenta": f_cuenta, 
+                        "Medio": f_medio
                     }])
                     df_final = pd.concat([df, nueva], ignore_index=True)
                     conn.update(worksheet="Hoja 1", data=df_final)
-                    st.toast(f"✅ Guardado como {f_cat}")
+                    st.success(f"✅ ¡{f_tipo} guardado con éxito!")
                     st.rerun()
 
     # --- SECCIÓN: BANCOS ---
@@ -155,20 +164,10 @@ if check_password():
         else:
             for idx, row in pendientes.iterrows():
                 with st.expander(f"{row['Tipo']} - {row['Entidad']} ($ {row['Monto']:,.2f})"):
-                    if st.button(f"Confirmar", key=f"btn_{idx}"):
+                    if st.button(f"Confirmar Liquidación", key=f"btn_{idx}"):
                         df.at[idx, "Estado"] = "Pagado"
                         conn.update(worksheet="Hoja 1", data=df)
                         st.rerun()
-
-    # --- SECCIÓN: VENCIMIENTOS ---
-    elif menu == "📆 Vencimientos":
-        st.title("📆 Próximos Vencimientos")
-        eg_pend = df[(df["Tipo"] == "Egreso") & (df["Estado"] == "Pendiente")].copy()
-        if not eg_pend.empty:
-            eg_pend['V_Date'] = pd.to_datetime(eg_pend['Vencimiento'], format='%d/%m/%Y', errors='coerce')
-            eg_pend = eg_pend.sort_values('V_Date')
-            for _, r in eg_pend.iterrows():
-                st.write(f"**{r['Vencimiento']}** - {r['Entidad']} ($ {r['Monto']:,.2f})")
 
     # --- SECCIÓN: HISTORIAL ---
     elif menu == "📂 Historial":
