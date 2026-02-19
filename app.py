@@ -42,7 +42,7 @@ def check_password():
 
 # --- INICIO DE LA APP ---
 if check_password():
-    # 2. Conexión y Carga de Datos
+    # 2. Conexión y Carga de Datos (Fuerzo ttl=0 para datos frescos)
     conn = st.connection("gsheets", type=GSheetsConnection)
     try:
         df = conn.read(worksheet="Hoja 1", ttl=0)
@@ -67,6 +67,7 @@ if check_password():
     if a_cobrar > 0: st.sidebar.warning(f"📩 A Cobrar: $ {a_cobrar:,.2f}")
     if a_pagar > 0: st.sidebar.error(f"💸 A Pagar: $ {a_pagar:,.2f}")
     st.sidebar.divider()
+    # Menú de navegación
     menu = st.sidebar.selectbox("Menú Principal", ["📊 Dashboard", "➕ Cargar Movimiento", "📝 Gestionar Pendientes", "📂 Ver Historial"])
 
     # --- 5. SECCIÓN: DASHBOARD ---
@@ -83,16 +84,16 @@ if check_password():
         p2.metric("Pendiente de Pago", f"$ {a_pagar:,.2f}")
         p3.metric("Saldo Proyectado", f"$ {saldo_real + a_cobrar - a_pagar:,.2f}")
 
-    # --- 6. SECCIÓN: CARGA (CON MEJORA DE FECHA) ---
+    # --- 6. SECCIÓN: CARGA ---
     elif menu == "➕ Cargar Movimiento":
-        st.title("➕ Cargar Nuevo Movimiento")
+        st.title("➕ Cargar Nuevo Movimiento (v2)") # El (v2) te confirmará que el código cambió
         
         with st.form("form_carga", clear_on_submit=True):
             c1, c2 = st.columns(2)
             with c1:
                 f_fecha = st.date_input("Seleccioná la Fecha", date.today())
-                # Ayuda visual para el usuario
-                st.caption(f"Fecha seleccionada: **{f_fecha.strftime('%d/%m/%Y')}**")
+                # AYUDA VISUAL DE FECHA ARGENTINA
+                st.info(f"Fecha que se guardará: {f_fecha.strftime('%d/%m/%Y')}")
                 
                 f_tipo = st.selectbox("Tipo", ["Ingreso", "Egreso"])
                 f_entidad = st.text_input("Entidad (Cliente/Proveedor)")
@@ -107,19 +108,8 @@ if check_password():
                 if f_entidad == "" or f_monto <= 0:
                     st.error("⚠️ Entidad y Monto son obligatorios.")
                 else:
-                    # Formateo estricto para la hoja de cálculo
                     fecha_arg = f_fecha.strftime("%d/%m/%Y")
-                    
-                    nueva_fila = pd.DataFrame([{
-                        "Fecha": fecha_arg, 
-                        "Tipo": f_tipo, 
-                        "Entidad": f_entidad, 
-                        "Categoría": f_cat, 
-                        "Monto": f_monto, 
-                        "Estado": f_estado, 
-                        "Notas": f_notas
-                    }])
-                    
+                    nueva_fila = pd.DataFrame([{"Fecha": fecha_arg, "Tipo": f_tipo, "Entidad": f_entidad, "Categoría": f_cat, "Monto": f_monto, "Estado": f_estado, "Notas": f_notas}])
                     df_final = pd.concat([df, nueva_fila], ignore_index=True)
                     conn.update(worksheet="Hoja 1", data=df_final)
                     st.toast(f"Guardado: {fecha_arg}")
@@ -127,17 +117,24 @@ if check_password():
 
     # --- 7. SECCIÓN: GESTIONAR PENDIENTES ---
     elif menu == "📝 Gestionar Pendientes":
-        st.title("📝 Gestión de Pendientes")
+        st.title("📝 Gestión de Pagos/Cobros")
+        # Forzamos la recarga de datos aquí también
         pendientes = df[df["Estado"] == "Pendiente"].copy()
+        
         if pendientes.empty:
-            st.success("No hay nada pendiente. 🎉")
+            st.success("No hay movimientos pendientes. 🎉")
         else:
+            st.write(f"Tenés **{len(pendientes)}** movimientos por liquidar:")
             for index, row in pendientes.iterrows():
-                icono = "🟢 [COBRO]" if row['Tipo'] == "Ingreso" else "🔴 [PAGO]"
-                with st.expander(f"{icono} {row['Entidad']} - $ {row['Monto']:,.2f} ({row['Fecha']})"):
-                    if st.button(f"Confirmar Liquidación de {row['Entidad']}", key=f"btn_{index}"):
+                label = f"🟢 {row['Entidad']}" if row['Tipo'] == "Ingreso" else f"🔴 {row['Entidad']}"
+                with st.expander(f"{label} - $ {row['Monto']:,.2f} ({row['Fecha']})"):
+                    st.write(f"**Categoría:** {row['Categoría']} | **Notas:** {row['Notas']}")
+                    if st.button(f"Pasar a PAGADO", key=f"upd_{index}"):
+                        # Actualizamos el DataFrame
                         df.at[index, "Estado"] = "Pagado"
+                        # Subimos todo
                         conn.update(worksheet="Hoja 1", data=df)
+                        st.success("Actualizado con éxito!")
                         st.rerun()
 
     # --- 8. SECCIÓN: HISTORIAL ---
